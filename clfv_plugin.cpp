@@ -38,15 +38,14 @@
 #include "bridge/util.h"
 #include "bridge/util_domain_algebra_dependent.h"
 
-/* general tools for the Nedelec element */
-
 /* discretizations' headers: */
+#include "elem_disc/local_clfv.h"
 
 using namespace std;
 using namespace ug::bridge;
 
 namespace ug{
-namespace ConserationLawFV{
+namespace Conservation_Law_FV{
 
 struct Functionality
 {
@@ -60,12 +59,21 @@ struct Functionality
 	 * @param grp	group for sorting of functionality
 	 */
 	template <typename TDomain>
-	static void Domain(Registry& reg, string grp)
+	static void Domain (Registry& reg, string grp)
 	{
-	//	string suffix = GetDomainSuffix<TDomain>();
-	//	string tag = GetDomainTag<TDomain>();
+		string suffix = GetDomainSuffix<TDomain> ();
+		string tag = GetDomainTag<TDomain> ();
 		
-	// Parameter specification tools
+	// The local FV discretization of the full-dimensional scalar conservation law
+		{
+			typedef ConservationLawFV<TDomain> T;
+			typedef IElemDisc<TDomain> TBase;
+			string name = string("ConservationLawFV").append (suffix);
+			reg.template add_class_<T, TBase > (name, grp)
+				.template add_constructor<void (*) (const char*,const char*)> ("Function(s)#Subset(s)")
+				.set_construct_as_smart_pointer (true);
+			reg.add_class_to_group (name, "ConservationLawFV", tag);
+		}
 	}
 	
 	/**
@@ -78,16 +86,16 @@ struct Functionality
 	 * @param grp	group for sorting of functionality
 	 */
 	template <typename TDomain, typename TAlgebra>
-	static void DomainAlgebra(Registry& reg, string grp)
+	static void DomainAlgebra (Registry& reg, string grp)
 	{
 	//	static const int dim = TDomain::dim;
-	//	string suffix = GetDomainAlgebraSuffix<TDomain,TAlgebra>();
-	//	string tag = GetDomainAlgebraTag<TDomain,TAlgebra>();
+	//	string suffix = GetDomainAlgebraSuffix<TDomain,TAlgebra> ();
+	//	string tag = GetDomainAlgebraTag<TDomain,TAlgebra> ();
 	};
 	
 };
 
-} // end namespace ConserationLawFV
+} // end namespace Conseration_Law_FV
 
 /**
  * This function is called when the plugin is loaded.
@@ -96,7 +104,7 @@ extern "C" void
 InitUGPlugin_ConservationLawFV(Registry* reg, string grp)
 {
 	grp.append("/SpatialDisc/ConservationLawFV");
-	typedef ConserationLawFV::Functionality Functionality;
+	typedef Conservation_Law_FV::Functionality Functionality;
 
 	try
 	{
