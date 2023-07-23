@@ -136,11 +136,16 @@ public:
 	 * value is assumed.
 	 */
 	/// \{
-	void set_flux(SmartPtr<CplUserData<MathVector<dim>, dim> > user);
-	void set_flux(const std::vector<number>& vVel);
+	void set_flux(SmartPtr<CplUserData<MathVector<dim>, dim> > user){
+		m_imFlux.set_data(user);
+	}
 #ifdef UG_FOR_LUA
-	void set_flux(const char* fctName);
-	void set_flux(LuaFunctionHandle fct);
+	void set_flux(const char* fctName){
+		set_flux(LuaUserDataFactory<MathVector<dim>,dim>::create(fctName));
+	}
+	void set_flux(LuaFunctionHandle fct){
+		set_flux(make_sp(new LuaUserData<MathVector<dim>,dim>(fct)));
+	}
 #endif
 	/// \}	
 	
@@ -150,11 +155,21 @@ public:
 	 * default.
 	 */
 	///	\{
-	void set_source(SmartPtr<CplUserData<number, dim> > user);
-	void set_source(number val);
+	void set_source(SmartPtr<CplUserData<number, dim> > user){
+			m_imSource.set_data(user);
+		};
+	void set_source(number val){
+			//if(val == 0.0) set_source(SmartPtr<CplUserData<number, dim> >());
+			//else 
+			set_source(make_sp(new ConstUserNumber<dim>(val)));
+		};
 #ifdef UG_FOR_LUA
-	void set_source(const char* fctName);
-	void set_source(LuaFunctionHandle fct);
+	void set_source(const char* fctName){
+			set_source(LuaUserDataFactory<number,dim>::create(fctName));
+		};
+	void set_source(LuaFunctionHandle fct){
+			set_source(make_sp(new LuaUserData<number,dim>(fct)));
+		};
 #endif
 	///	\}
 	

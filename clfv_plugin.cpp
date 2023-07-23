@@ -73,7 +73,6 @@ struct Functionality
 		reg.template add_class_<T, TBase > (name, grp)
 			.template add_constructor<void (*) (const char*,const char*)> ("Function(s)#Subset(s)")
 			.add_method("set_flux", static_cast<void (T::*)(SmartPtr<CplUserData<MathVector<dim>, dim> >)>(&T::set_flux), "", "Flux")
-			.add_method("set_flux", static_cast<void (T::*)(const std::vector<number>&)>(&T::set_flux), "", "Flux")
 #ifdef UG_FOR_LUA
 			.add_method("set_flux", static_cast<void (T::*)(const char*)>(&T::set_flux), "", "Flux")
 			.add_method("set_flux", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_flux), "", "Flux")
