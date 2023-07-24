@@ -2,6 +2,8 @@
  * Copyright (c) 2023
  * Author: Dmitry Logashenko, Shuai Lu
  * 
+ * Based on ConvectionDiffusion
+ * 
  * This file is part of UG4.
  * 
  * UG4 is free software: you can redistribute it and/or modify it under the
@@ -63,17 +65,40 @@ struct Functionality
 	{
 		string suffix = GetDomainSuffix<TDomain> ();
 		string tag = GetDomainTag<TDomain> ();
-		
-	// The local FV discretization of the full-dimensional scalar conservation law
-		{
-			typedef ConservationLawFV<TDomain> T;
-			typedef IElemDisc<TDomain> TBase;
-			string name = string("ConservationLawFV").append (suffix);
-			reg.template add_class_<T, TBase > (name, grp)
-				.template add_constructor<void (*) (const char*,const char*)> ("Function(s)#Subset(s)")
-				.set_construct_as_smart_pointer (true);
-			reg.add_class_to_group (name, "ConservationLawFV", tag);
-		}
+		static const int dim = TDomain::dim;
+
+		typedef ConservationLawFV<TDomain> T;
+		typedef IElemDisc<TDomain> TBase;
+		string name = string("ConservationLawFV").append (suffix);
+		reg.template add_class_<T, TBase > (name, grp)
+			.template add_constructor<void (*) (const char*,const char*)> ("Function(s)#Subset(s)")
+			.add_method("set_flux", static_cast<void (T::*)(SmartPtr<CplUserData<MathVector<dim>, dim> >)>(&T::set_flux), "", "Flux")
+#ifdef UG_FOR_LUA
+			.add_method("set_flux", static_cast<void (T::*)(const char*)>(&T::set_flux), "", "Flux")
+			.add_method("set_flux", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_flux), "", "Flux")
+#endif
+
+			.add_method("set_source", static_cast<void (T::*)(SmartPtr<CplUserData<number, dim> >)>(&T::set_source), "", "Source")
+			.add_method("set_source", static_cast<void (T::*)(number)>(&T::set_source), "", "Source")
+#ifdef UG_FOR_LUA
+			.add_method("set_source", static_cast<void (T::*)(const char*)>(&T::set_source), "", "Source")
+			.add_method("set_source", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_source), "", "Source")
+#endif
+/*
+			.add_method("set_mass", static_cast<void (T::*)(SmartPtr<CplUserData<number, dim> >)>(&T::set_mass), "", "Mass")
+			.add_method("set_mass", static_cast<void (T::*)(number)>(&T::set_mass), "", "Mass")
+#ifdef UG_FOR_LUA
+			.add_method("set_mass", static_cast<void (T::*)(const char*)>(&T::set_mass), "", "Mass")
+			.add_method("set_mass", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_mass), "", "Mass")
+#endif
+*/
+
+			.add_method("value", &T::value)
+			.add_method("gradient", &T::gradient)
+
+			.set_construct_as_smart_pointer (true);
+		reg.add_class_to_group (name, "ConservationLawFV", tag);
+
 	}
 	
 	/**

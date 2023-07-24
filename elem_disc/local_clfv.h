@@ -2,6 +2,8 @@
  * Copyright (c) 2023:
  * Author: Dmitry Logashenko, Shuai Lu
  * 
+ * Based on ConvectionDiffusion
+ * 
  * This file is part of UG4.
  * 
  * UG4 is free software: you can redistribute it and/or modify it under the
@@ -86,6 +88,9 @@ private:
 	
 ///	world dimension
 	static const int dim = base_type::dim;
+	
+///	abbreviation for the local solution
+	static const size_t _C_ = 0;
 
 public:
 ///	class constructor
@@ -94,6 +99,104 @@ public:
 		const char * function, ///< name of the unknown u
 		const char * subsets ///< subsets where to assemble
 	);
+	
+protected:
+	void init_imports();
+	
+			///	computes the concentration
+	template <typename TElem>
+	void ex_value(number vValue[],
+					const MathVector<dim> vGlobIP[],
+					number time, int si,
+					const LocalVector& u,
+					GridObject* elem,
+					const MathVector<dim> vCornerCoords[],
+					const MathVector<FV1Geometry<TElem, dim>::dim> vLocIP[],
+					const size_t nip,
+					bool bDeriv,
+					std::vector<std::vector<number> > vvvDeriv[]);
+
+	///	computes the gradient of the concentration
+	template <typename TElem>
+	void ex_grad(MathVector<dim> vValue[],
+					const MathVector<dim> vGlobIP[],
+					number time, int si,
+					const LocalVector& u,
+					GridObject* elem,
+					const MathVector<dim> vCornerCoords[],
+					const MathVector<FV1Geometry<TElem, dim>::dim> vLocIP[],
+					const size_t nip,
+					bool bDeriv,
+					std::vector<std::vector<MathVector<dim> > > vvvDeriv[]);
+	
+public:
+	///	sets the flux
+	/**
+	 * This method sets the Flux. If no field is provided a zero
+	 * value is assumed.
+	 */
+	/// \{
+	void set_flux(SmartPtr<CplUserData<MathVector<dim>, dim> > user){
+		m_imFlux.set_data(user);
+	}
+#ifdef UG_FOR_LUA
+	void set_flux(const char* fctName){
+		set_flux(LuaUserDataFactory<MathVector<dim>,dim>::create(fctName));
+	}
+	void set_flux(LuaFunctionHandle fct){
+		set_flux(make_sp(new LuaUserData<MathVector<dim>,dim>(fct)));
+	}
+#endif
+	/// \}	
+	
+	///	sets the source / sink term
+	/**
+	 * This method sets the source/sink value. A zero value is assumed as
+	 * default.
+	 */
+	///	\{
+	void set_source(SmartPtr<CplUserData<number, dim> > user){
+			m_imSource.set_data(user);
+		};
+	void set_source(number val){
+			//if(val == 0.0) set_source(SmartPtr<CplUserData<number, dim> >());
+			//else 
+			set_source(make_sp(new ConstUserNumber<dim>(val)));
+		};
+#ifdef UG_FOR_LUA
+	void set_source(const char* fctName){
+			set_source(LuaUserDataFactory<number,dim>::create(fctName));
+		};
+	void set_source(LuaFunctionHandle fct){
+			set_source(make_sp(new LuaUserData<number,dim>(fct)));
+		};
+#endif
+	///	\}
+	
+protected:		
+	///	Data import for the Flux
+	DataImport<MathVector<dim>, dim > m_imFlux;
+		
+	///	Data import for the right-hand side (volume)
+	DataImport<number, dim> m_imSource;
+
+public:
+	typedef SmartPtr<CplUserData<number, dim> > NumberExport;
+	typedef SmartPtr<CplUserData<MathVector<dim>, dim> > GradExport;
+
+	///	returns the export of the value of associated unknown function
+	SmartPtr<CplUserData<number, dim> > value();
+
+	///	returns the export of the gradient of associated unknown function
+	SmartPtr<CplUserData<MathVector<dim>, dim> > gradient();
+
+protected:
+	///	Export for the concentration
+	SmartPtr<DataExport<number, dim> > m_exValue;
+
+	///	Export for the gradient of concentration
+	SmartPtr<DataExport<MathVector<dim>, dim> > m_exGrad;
+		
 
 //---- Local discretization interface: ----
 private:
@@ -130,17 +233,32 @@ private:
 
 	template <typename TElem>
 	void ass_rhs_elem(LocalVector& d, GridObject* elem, const position_type vCornerCoords[]);
+	
+	
+protected:
+	///	computes the linearized defect w.r.t to the flux
+	template <typename TElem>
+	void lin_def_flux(const LocalVector& u,
+						std::vector<std::vector<MathVector<dim> > > vvvLinDef[],
+						const size_t nip);
+						  
+	///	computes the linearized defect w.r.t to the source term
+	template <typename TElem>
+	void lin_def_source(const LocalVector& u,
+						std::vector<std::vector<number> > vvvLinDef[],
+						const size_t nip);
 
 //---- Registration of the template functions: ----
 private:
 	
 	void register_all_loc_discr_funcs();
 
-	struct RegisterLocalDiscr {
-			RegisterLocalDiscr(this_type * pThis) : m_pThis(pThis){}
-			this_type * m_pThis;
-			template< typename TElem > void operator() (TElem &)
-			{m_pThis->register_loc_discr_func<TElem> ();}
+	struct RegisterLocalDiscr 
+	{
+		RegisterLocalDiscr(this_type * pThis) : m_pThis(pThis){}
+		this_type * m_pThis;
+		template< typename TElem > void operator() (TElem &)
+		{m_pThis->register_loc_discr_func<TElem> ();}
 	};
 
 	template <typename TElem>

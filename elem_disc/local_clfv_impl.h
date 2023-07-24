@@ -2,6 +2,8 @@
  * Copyright (c) 2023:
  * Author: Dmitry Logashenko, Shuai Lu
  * 
+ * Based on ConvectionDiffusion
+ * 
  * This file is part of UG4.
  * 
  * UG4 is free software: you can redistribute it and/or modify it under the
@@ -69,7 +71,7 @@ void ConservationLawFV<TDomain>::prepare_setting
 //	check that these are the Nedelec elements
 	if (vLfeID[0].order () != 1 || vLfeID[0].type () != LFEID::LAGRANGE)
 		UG_THROW ("Error: ConservationLawFV works with the Lagrange-1 functions only.");
-}
+}		
 
 ////////////////////////////////////////////////////////////////////////////////
 // assembling
@@ -83,11 +85,18 @@ void ConservationLawFV<TDomain>::prepare_element_loop
 	ReferenceObjectID roid, ///< only elements with this roid are looped over
 	int si ///< and only in this subdomain
 )
-{
+{						
 	typedef FV1Geometry<TElem, dim> TFVGeom;
-
 	TFVGeom& geo = GeomProvider<TFVGeom>::get ();
 	static const int refDim = TElem::dim;
+	
+	const MathVector<refDim>* vSCVFip = geo.scvf_local_ips();
+	const size_t numSCVFip = geo.num_scvf_ips();
+	const MathVector<refDim>* vSCVip = geo.scv_local_ips();
+	const size_t numSCVip = geo.num_scv_ips();
+
+	m_imFlux.template 			set_local_ips<refDim>(vSCVFip,numSCVFip, false);		
+	m_imSource.template 		set_local_ips<refDim>(vSCVip,numSCVip, false);
 }
 
 /// finalizes the loop over the elements
@@ -110,8 +119,6 @@ void ConservationLawFV<TDomain>::prepare_element
 {
 	typedef FV1Geometry<TElem, dim> TFVGeom;
 	
-	TElem * pElem = static_cast<TElem*> (elem);
-	
 // 	update the FV geometry for this element
 	TFVGeom& geo = GeomProvider<TFVGeom>::get ();
 	try
@@ -119,7 +126,42 @@ void ConservationLawFV<TDomain>::prepare_element
 		geo.update (elem, vCornerCoords, &(this->subset_handler()));
 	}
 	UG_CATCH_THROW("ConservationLawFV: Cannot update the Finite Volume Geometry for an element.");
+	
+	//	set global positions
+	const MathVector<dim>* vSCVFip = geo.scvf_global_ips();
+	const size_t numSCVFip = geo.num_scvf_ips();
+	const MathVector<dim>* vSCVip = geo.scv_global_ips();
+	const size_t numSCVip = geo.num_scv_ips();
+	
+	m_imFlux.				set_global_ips(vSCVFip, numSCVFip);	
+	m_imSource.				set_global_ips(vSCVip, numSCVip);
 }
+
+template <class TVector>
+static TVector CalculateCenter(GridObject* o, const TVector* coords)
+{
+	TVector v;
+	VecSet(v, 0);
+
+	size_t numCoords = 0;
+	switch(o->base_object_id()){
+		case VERTEX: numCoords = 1; break;
+		case EDGE: numCoords = static_cast<Edge*>(o)->num_vertices(); break;
+		case FACE: numCoords = static_cast<Face*>(o)->num_vertices(); break;
+		case VOLUME: numCoords = static_cast<Volume*>(o)->num_vertices(); break;
+		default: UG_THROW("Unknown element type."); break;
+	}
+
+	for(size_t i = 0; i < numCoords; ++i)
+		VecAdd(v, v, coords[i]);
+
+	if(numCoords > 0)
+		VecScale(v, v, 1. / (number)numCoords);
+
+	return v;
+}
+
+
 
 /// assembles the stiffness part of the local defect
 template<typename TDomain>
@@ -135,13 +177,25 @@ void ConservationLawFV<TDomain>::ass_dA_elem
 	typedef typename reference_element_traits<TElem>::reference_element_type ref_elem_type;
 	typedef FV1Geometry<TElem, dim> TFVGeom;
 	
-	TElem * pElem = static_cast<TElem*> (elem);
-	
 // 	Get finite volume geometry
 	const TFVGeom& geo = GeomProvider<TFVGeom>::get ();
 
     const size_t numSh = geo.num_sh();
 	const size_t numScvf = geo.num_scvf();
+
+	// 	loop Sub Control Volume Faces (SCVF)
+	for(size_t ip = 0; ip < numScvf; ++ip)
+	{
+		// 	get current SCVF
+		const typename TFVGeom::SCVF& scvf = geo.scvf(ip);
+
+		//	sum up flux
+		const number flux = VecDot(m_imFlux[ip], scvf.normal());
+
+		//  add to local defect
+		d(_C_, scvf.from()) += flux;
+		d(_C_, scvf.to()  ) -= flux;
+	}//end loop
 }
 
 /// assembles the local Jacobian of the stiffness part
@@ -158,13 +212,13 @@ void ConservationLawFV<TDomain>::ass_JA_elem
 	typedef typename reference_element_traits<TElem>::reference_element_type ref_elem_type;
 	typedef FV1Geometry<TElem, dim> TFVGeom;
 	
-	TElem * pElem = static_cast<TElem*> (elem);
-	
 // 	Get finite volume geometry
 	const TFVGeom& geo = GeomProvider<TFVGeom>::get ();
 
     const size_t numSh = geo.num_sh();
 	const size_t numScvf = geo.num_scvf();
+
+
 }
 
 /// assembles the mass part of the local defect
@@ -203,7 +257,300 @@ void ConservationLawFV<TDomain>::ass_rhs_elem
 	const position_type vCornerCoords []
 )
 {
+	typedef FV1Geometry<TElem, dim> TFVGeom;
+	
+// 	Get finite volume geometry
+	const TFVGeom& geo = GeomProvider<TFVGeom>::get ();
+
+	// loop Sub Control Volumes (SCV)
+	if ( m_imSource.data_given() ) {
+		for ( size_t ip = 0; ip < geo.num_scv(); ++ip ) {
+			// get current SCV
+			const typename TFVGeom::SCV& scv = geo.scv( ip );
+
+			// get associated node
+			const int co = scv.node_id();
+
+			// Add to local rhs
+			b(_C_, co) += m_imSource[ip] * scv.volume();
+			//UG_LOG("b(_C_, co) = " << b(_C_, co) << "; \t ip " << ip << "; \t co " << co << "; \t scv_vol " << scv.volume() << "; \t m_imSource[ip] " << m_imSource[ip] << std::endl);
+		}
+	}
 }
+
+
+template<typename TDomain>
+template <typename TElem>
+void ConservationLawFV<TDomain>::
+lin_def_flux(const LocalVector& u,
+             std::vector<std::vector<MathVector<dim> > > vvvLinDef[],
+             const size_t nip)
+{
+	typedef FV1Geometry<TElem, dim> TFVGeom;
+	
+//  get finite volume geometry
+	static const TFVGeom& geo = GeomProvider<TFVGeom>::get();
+
+//	reset the values for the linearized defect
+	for(size_t ip = 0; ip < nip; ++ip)
+		for(size_t c = 0; c < vvvLinDef[ip].size(); ++c)
+			for(size_t sh = 0; sh < vvvLinDef[ip][c].size(); ++sh)
+				vvvLinDef[ip][c][sh] = 0.0;
+
+//  loop Sub Control Volume Faces (SCVF)
+	for(size_t ip = 0; ip < geo.num_scvf(); ++ip)
+	{
+	// get current SCVF
+		const typename TFVGeom::SCVF& scvf = geo.scvf(ip);
+
+	//	add parts for both sides of scvf
+		vvvLinDef[ip][_C_][scvf.from()] += scvf.normal();
+		vvvLinDef[ip][_C_][scvf.to()] -= scvf.normal();
+	}
+}
+
+//	computes the linearized defect w.r.t to the source
+template<typename TDomain>
+template <typename TElem>
+void ConservationLawFV<TDomain>::
+lin_def_source(const LocalVector& u,
+               std::vector<std::vector<number> > vvvLinDef[],
+               const size_t nip)
+{
+	typedef FV1Geometry<TElem, dim> TFVGeom;
+	
+//  get finite volume geometry
+	static const TFVGeom& geo = GeomProvider<TFVGeom>::get();
+
+// 	loop Sub Control Volumes (SCV)
+	for(size_t ip = 0; ip < geo.num_scv(); ++ip)
+	{
+	// 	get current SCV
+		const typename TFVGeom::SCV& scv = geo.scv(ip);
+
+	// 	get associated node
+		const int co = scv.node_id();
+
+	// 	set lin defect
+		vvvLinDef[ip][_C_][co] = scv.volume();
+	}
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+//	Value and Gradient
+////////////////////////////////////////////////////////////////////////////////
+template<typename TDomain>
+template <typename TElem>
+void ConservationLawFV<TDomain>::
+ex_value(number vValue[],
+         const MathVector<dim> vGlobIP[],
+         number time, int si,
+         const LocalVector& u,
+         GridObject* elem,
+         const MathVector<dim> vCornerCoords[],
+         const MathVector<FV1Geometry<TElem, dim>::dim> vLocIP[],
+         const size_t nip,
+         bool bDeriv,
+         std::vector<std::vector<number> > vvvDeriv[])
+{
+	typedef FV1Geometry<TElem, dim> TFVGeom;
+	
+// 	update the FV geometry for this element
+	TFVGeom& geo = GeomProvider<TFVGeom>::get ();
+
+//	reference element
+	typedef typename reference_element_traits<TElem>::reference_element_type ref_elem_type;
+
+//	number of shape functions
+	static const size_t numSH =	ref_elem_type::numCorners;
+
+//	SCVF ip
+	if(vLocIP == geo.scvf_local_ips())
+	{
+	//	Loop Sub Control Volume Faces (SCVF)
+		for(size_t ip = 0; ip < geo.num_scvf(); ++ip)
+		{
+		// 	Get current SCVF
+			const typename TFVGeom::SCVF& scvf = geo.scvf(ip);
+
+		//	compute concentration at ip
+			vValue[ip] = 0.0;
+			for(size_t sh = 0; sh < scvf.num_sh(); ++sh)
+				vValue[ip] += u(_C_, sh) * scvf.shape(sh);
+
+		//	compute derivative w.r.t. to unknowns iff needed
+			if(bDeriv)
+			{
+				for(size_t sh = 0; sh < scvf.num_sh(); ++sh)
+					vvvDeriv[ip][_C_][sh] = scvf.shape(sh);
+
+				// do not forget that number of DoFs (== vvvDeriv[ip][_C_])
+				// might be > scvf.num_sh() in case of hanging nodes!
+				size_t ndof = vvvDeriv[ip][_C_].size();
+				for (size_t sh = scvf.num_sh(); sh < ndof; ++sh)
+					vvvDeriv[ip][_C_][sh] = 0.0;
+			}
+		}
+	}
+//	SCV ip
+	else if(vLocIP == geo.scv_local_ips())
+	{
+	//	Loop Sub Control Volumes (SCV)
+		for(size_t ip = 0; ip < geo.num_scv(); ++ip)
+		{
+		// 	Get current SCV
+			const typename TFVGeom::SCV& scv = geo.scv(ip);
+
+		//	get corner of SCV
+			const size_t co = scv.node_id();
+
+		//	solution at ip
+			vValue[ip] = u(_C_, co);
+
+		//	set derivatives if needed
+			if(bDeriv)
+			{
+				size_t ndof = vvvDeriv[ip][_C_].size();
+				for(size_t sh = 0; sh < ndof; ++sh)
+					vvvDeriv[ip][_C_][sh] = (sh==co) ? 1.0 : 0.0;
+			}
+		}
+	}
+// 	general case
+	else
+	{
+	//	get trial space
+		LagrangeP1<ref_elem_type>& rTrialSpace = Provider<LagrangeP1<ref_elem_type> >::get();
+
+	//	storage for shape function at ip
+		number vShape[numSH];
+
+	//	loop ips
+		for(size_t ip = 0; ip < nip; ++ip)
+		{
+		//	evaluate at shapes at ip
+			rTrialSpace.shapes(vShape, vLocIP[ip]);
+
+		//	compute concentration at ip
+			vValue[ip] = 0.0;
+			for(size_t sh = 0; sh < numSH; ++sh)
+				vValue[ip] += u(_C_, sh) * vShape[sh];
+
+		//	compute derivative w.r.t. to unknowns iff needed
+		//	\todo: maybe store shapes directly in vvvDeriv
+			if(bDeriv)
+			{
+				for(size_t sh = 0; sh < numSH; ++sh)
+					vvvDeriv[ip][_C_][sh] = vShape[sh];
+
+				// beware of hanging nodes!
+				size_t ndof = vvvDeriv[ip][_C_].size();
+				for (size_t sh = numSH; sh < ndof; ++sh)
+					vvvDeriv[ip][_C_][sh] = 0.0;
+			}
+		}
+	}
+}
+
+template<typename TDomain>
+template <typename TElem>
+void ConservationLawFV<TDomain>::
+ex_grad(MathVector<dim> vValue[],
+        const MathVector<dim> vGlobIP[],
+        number time, int si,
+        const LocalVector& u,
+        GridObject* elem,
+        const MathVector<dim> vCornerCoords[],
+        const MathVector<FV1Geometry<TElem, dim>::dim> vLocIP[],
+        const size_t nip,
+        bool bDeriv,
+        std::vector<std::vector<MathVector<dim> > > vvvDeriv[])
+{
+	typedef FV1Geometry<TElem, dim> TFVGeom;
+	
+	// 	Get finite volume geometry
+	static const TFVGeom& geo = GeomProvider<TFVGeom>::get();
+
+//	reference element
+	typedef typename reference_element_traits<TElem>::reference_element_type ref_elem_type;
+
+//	reference dimension
+	static const int refDim = ref_elem_type::dim;
+
+//	number of shape functions
+	static const size_t numSH =	ref_elem_type::numCorners;
+
+//	SCVF ip
+	if(vLocIP == geo.scvf_local_ips())
+	{
+	//	Loop Sub Control Volume Faces (SCVF)
+		for(size_t ip = 0; ip < geo.num_scvf(); ++ip)
+		{
+		// 	Get current SCVF
+			const typename TFVGeom::SCVF& scvf = geo.scvf(ip);
+
+			VecSet(vValue[ip], 0.0);
+
+			for(size_t sh = 0; sh < scvf.num_sh(); ++sh)
+				VecScaleAppend(vValue[ip], u(_C_, sh), scvf.global_grad(sh));
+
+			if(bDeriv)
+			{
+				for(size_t sh = 0; sh < scvf.num_sh(); ++sh)
+					vvvDeriv[ip][_C_][sh] = scvf.global_grad(sh);
+
+				// beware of hanging nodes!
+				size_t ndof = vvvDeriv[ip][_C_].size();
+				for (size_t sh = scvf.num_sh(); sh < ndof; ++sh)
+					vvvDeriv[ip][_C_][sh] = 0.0;
+			}
+		}
+	}
+// 	general case
+	else
+	{
+	//	get trial space
+		LagrangeP1<ref_elem_type>& rTrialSpace = Provider<LagrangeP1<ref_elem_type> >::get();
+
+	//	storage for shape function at ip
+		MathVector<refDim> vLocGrad[numSH];
+		MathVector<refDim> locGrad;
+
+	//	Reference Mapping
+		MathMatrix<dim, refDim> JTInv;
+		ReferenceMapping<ref_elem_type, dim> mapping(vCornerCoords);
+
+	//	loop ips
+		for(size_t ip = 0; ip < nip; ++ip)
+		{
+		//	evaluate at shapes at ip
+			rTrialSpace.grads(vLocGrad, vLocIP[ip]);
+
+		//	compute grad at ip
+			VecSet(locGrad, 0.0);
+			for(size_t sh = 0; sh < numSH; ++sh)
+				VecScaleAppend(locGrad, u(_C_, sh), vLocGrad[sh]);
+
+		//	compute global grad
+			mapping.jacobian_transposed_inverse(JTInv, vLocIP[ip]);
+			MatVecMult(vValue[ip], JTInv, locGrad);
+
+		//	compute derivative w.r.t. to unknowns iff needed
+			if(bDeriv)
+			{
+				for(size_t sh = 0; sh < numSH; ++sh)
+					MatVecMult(vvvDeriv[ip][_C_][sh], JTInv, vLocGrad[sh]);
+
+				// beware of hanging nodes!
+				size_t ndof = vvvDeriv[ip][_C_].size();
+				for (size_t sh = numSH; sh < ndof; ++sh)
+					vvvDeriv[ip][_C_][sh] = 0.0;
+			}
+		}
+	}
+};
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //	register assembling functions
@@ -226,17 +573,26 @@ template<typename TElem> // the element to register for
 void ConservationLawFV<TDomain>::register_loc_discr_func ()
 {
 	static const ReferenceObjectID id = geometry_traits<TElem>::REFERENCE_OBJECT_ID;
+	typedef this_type T;
+	static const int refDim = reference_element_traits<TElem>::dim;
 	
 	this->clear_add_fct(id);
 	
-	this->set_prep_elem_loop_fct(id, & this_type::template prepare_element_loop<TElem>);
-	this->set_fsh_elem_loop_fct	(id, & this_type::template finish_element_loop<TElem>);
-	this->set_prep_elem_fct		(id, & this_type::template prepare_element<TElem>);
-	this->set_add_def_A_elem_fct(id, & this_type::template ass_dA_elem<TElem>);
-	this->set_add_jac_A_elem_fct(id, & this_type::template ass_JA_elem<TElem>);
-	this->set_add_def_M_elem_fct(id, & this_type::template ass_dM_elem<TElem>);
-	this->set_add_jac_M_elem_fct(id, & this_type::template ass_JM_elem<TElem>);
-	this->set_add_rhs_elem_fct	(id, & this_type::template ass_rhs_elem<TElem>);
+	this->set_prep_elem_loop_fct(id, &T::template prepare_element_loop<TElem>);
+	this->set_fsh_elem_loop_fct	(id, &T::template finish_element_loop<TElem>);
+	this->set_prep_elem_fct		(id, &T::template prepare_element<TElem>);
+	this->set_add_def_A_elem_fct(id, &T::template ass_dA_elem<TElem>);
+	this->set_add_jac_A_elem_fct(id, &T::template ass_JA_elem<TElem>);
+	this->set_add_def_M_elem_fct(id, &T::template ass_dM_elem<TElem>);
+	this->set_add_jac_M_elem_fct(id, &T::template ass_JM_elem<TElem>);
+	this->set_add_rhs_elem_fct	(id, &T::template ass_rhs_elem<TElem>);
+	
+	m_imFlux.set_fct(id, this, &T::template lin_def_flux<TElem>);
+	m_imSource.	  set_fct(id, this, &T::template lin_def_source<TElem>);
+	
+	//	exports
+	m_exValue->	   template set_fct<T,refDim>(id, this, &T::template ex_value<TElem>);
+	m_exGrad->template set_fct<T,refDim>(id, this, &T::template ex_grad<TElem>);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -249,16 +605,62 @@ ConservationLawFV
 	const char * functions, ///< name of the unknown u
 	const char * subsets ///< subsets where to assemble
 )
-:	IElemDisc<TDomain> (functions, subsets)
+:	IElemDisc<TDomain> (functions, subsets),
+	m_exValue(new DataExport<number, dim>(functions)),
+	m_exGrad(new DataExport<MathVector<dim>, dim>(functions))
 {
 //	check number of functions
 	if (this->num_fct () != 1)
 		UG_THROW ("Wrong number of functions: The ElemDisc 'ConservationLawFV'"
 					" discretizes a scalar conservation law. Specify only 1 function.");
 
+// init all imports
+	init_imports();
+
+//	default value for mass scale
+//	set_mass_scale(1.0);
+	
 //	register assemble functions
 	register_all_loc_discr_funcs ();
 }
+
+////////////////////////////////////////////////////////////////////////////////
+//	user data
+////////////////////////////////////////////////////////////////////////////////
+template <typename TDomain>
+typename ConservationLawFV<TDomain>::NumberExport
+ConservationLawFV<TDomain>::
+value() {return m_exValue;}
+
+template <typename TDomain>
+typename ConservationLawFV<TDomain>::GradExport
+ConservationLawFV<TDomain>::
+gradient() {return m_exGrad;}
+
+template<typename TDomain>
+void ConservationLawFV<TDomain>::
+init_imports()
+{
+	//	register imports
+	this->register_import(m_imFlux);
+	this->register_import(m_imSource);
+	
+	m_imSource.set_rhs_part();
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+//	explicit template instantiations
+////////////////////////////////////////////////////////////////////////////////
+#ifdef UG_DIM_1
+template class ConservationLawFV<Domain1d>;
+#endif
+#ifdef UG_DIM_2
+template class ConservationLawFV<Domain2d>;
+#endif
+#ifdef UG_DIM_3
+template class ConservationLawFV<Domain3d>;
+#endif
 	
 } // end namespace Conservation_Law_FV
 } // end namespace ug
