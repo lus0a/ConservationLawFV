@@ -43,6 +43,9 @@
 /* discretizations' headers: */
 #include "elem_disc/local_clfv.h"
 
+/* auxiliary stuff */
+#include "attachment_cmd.h"
+
 using namespace std;
 using namespace ug::bridge;
 
@@ -66,39 +69,31 @@ struct Functionality
 		string suffix = GetDomainSuffix<TDomain> ();
 		string tag = GetDomainTag<TDomain> ();
 		static const int dim = TDomain::dim;
-
+		
+		{
 		typedef ConservationLawFV<TDomain> T;
 		typedef IElemDisc<TDomain> TBase;
 		string name = string("ConservationLawFV").append (suffix);
 		reg.template add_class_<T, TBase > (name, grp)
 			.template add_constructor<void (*) (const char*,const char*)> ("Function(s)#Subset(s)")
 			.add_method("set_flux", static_cast<void (T::*)(SmartPtr<CplUserData<MathVector<dim>, dim> >)>(&T::set_flux), "", "Flux")
-#ifdef UG_FOR_LUA
+			#ifdef UG_FOR_LUA
 			.add_method("set_flux", static_cast<void (T::*)(const char*)>(&T::set_flux), "", "Flux")
 			.add_method("set_flux", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_flux), "", "Flux")
-#endif
-
+			#endif
 			.add_method("set_source", static_cast<void (T::*)(SmartPtr<CplUserData<number, dim> >)>(&T::set_source), "", "Source")
 			.add_method("set_source", static_cast<void (T::*)(number)>(&T::set_source), "", "Source")
-#ifdef UG_FOR_LUA
+			#ifdef UG_FOR_LUA
 			.add_method("set_source", static_cast<void (T::*)(const char*)>(&T::set_source), "", "Source")
 			.add_method("set_source", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_source), "", "Source")
-#endif
-/*
-			.add_method("set_mass", static_cast<void (T::*)(SmartPtr<CplUserData<number, dim> >)>(&T::set_mass), "", "Mass")
-			.add_method("set_mass", static_cast<void (T::*)(number)>(&T::set_mass), "", "Mass")
-#ifdef UG_FOR_LUA
-			.add_method("set_mass", static_cast<void (T::*)(const char*)>(&T::set_mass), "", "Mass")
-			.add_method("set_mass", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_mass), "", "Mass")
-#endif
-*/
+			#endif
 
 			.add_method("value", &T::value)
 			.add_method("gradient", &T::gradient)
 
 			.set_construct_as_smart_pointer (true);
 		reg.add_class_to_group (name, "ConservationLawFV", tag);
-
+		}
 	}
 	
 	/**
@@ -116,6 +111,11 @@ struct Functionality
 	//	static const int dim = TDomain::dim;
 	//	string suffix = GetDomainAlgebraSuffix<TDomain,TAlgebra> ();
 	//	string tag = GetDomainAlgebraTag<TDomain,TAlgebra> ();
+		
+		{
+		typedef GridFunction<TDomain, TAlgebra> gf_type; 
+		reg.add_function("CopyGlobAttachmentToGF_CellNumber", static_cast<void (*)(const char *, SmartPtr<gf_type>, const char *)> (&CopyGlobAttachmentToGF_CellNumber), grp, "Copies attachment to a function", "Attachment#GridFunc#Component");
+		}
 	};
 	
 };
