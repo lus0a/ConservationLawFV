@@ -77,12 +77,22 @@ struct Functionality
 			.add_method("set_flux", static_cast<void (T::*)(const char*)>(&T::set_flux), "", "Flux")
 			.add_method("set_flux", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_flux), "", "Flux")
 #endif
-
+			.add_method("set_velocity", static_cast<void (T::*)(SmartPtr<CplUserData<MathVector<dim>, dim> >)>(&T::set_velocity), "", "Velocity Field")
+#ifdef UG_FOR_LUA
+			.add_method("set_velocity", static_cast<void (T::*)(const char*)>(&T::set_velocity), "", "Velocity Field")
+			.add_method("set_velocity", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_velocity), "", "Velocity Field")
+#endif
 			.add_method("set_source", static_cast<void (T::*)(SmartPtr<CplUserData<number, dim> >)>(&T::set_source), "", "Source")
 			.add_method("set_source", static_cast<void (T::*)(number)>(&T::set_source), "", "Source")
 #ifdef UG_FOR_LUA
 			.add_method("set_source", static_cast<void (T::*)(const char*)>(&T::set_source), "", "Source")
 			.add_method("set_source", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_source), "", "Source")
+#endif
+			.add_method("set_krw", static_cast<void (T::*)(SmartPtr<CplUserData<number, dim> >)>(&T::set_krw), "", "RelativeK")
+			.add_method("set_krw", static_cast<void (T::*)(number)>(&T::set_krw), "", "RelativeK")
+#ifdef UG_FOR_LUA
+			.add_method("set_krw", static_cast<void (T::*)(const char*)>(&T::set_krw), "", "RelativeK")
+			.add_method("set_krw", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_krw), "", "RelativeK")
 #endif
 /*
 			.add_method("set_mass", static_cast<void (T::*)(SmartPtr<CplUserData<number, dim> >)>(&T::set_mass), "", "Mass")
@@ -92,10 +102,11 @@ struct Functionality
 			.add_method("set_mass", static_cast<void (T::*)(LuaFunctionHandle)>(&T::set_mass), "", "Mass")
 #endif
 */
-
+			.add_method("set_upwind", &T::set_upwind, "", "Sets the upwind type for the convective terms")
 			.add_method("value", &T::value)
 			.add_method("gradient", &T::gradient)
-
+			.add_method("convection", &T::convection)
+			
 			.set_construct_as_smart_pointer (true);
 		reg.add_class_to_group (name, "ConservationLawFV", tag);
 

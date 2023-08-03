@@ -50,6 +50,7 @@
 #include "lib_disc/function_spaces/grid_function.h"
 
 /* Discretization's headers: */
+#include "lib_disc/spatial_disc/disc_util/conv_shape_interface.h"
 
 namespace ug{
 namespace Conservation_Law_FV{
@@ -99,11 +100,20 @@ public:
 		const char * function, ///< name of the unknown u
 		const char * subsets ///< subsets where to assemble
 	);
-	
+
+	void set_upwind(SmartPtr<IConvectionShapes<dim> > shapes) {m_spConvShape = shapes;}
+
 protected:
 	void init_imports();
 	
-			///	computes the concentration
+	/// method to compute the upwind shapes
+	SmartPtr<IConvectionShapes<dim> > m_spConvShape;
+
+	///	returns the updated convection shapes
+	typedef IConvectionShapes<dim> conv_shape_type;
+	const IConvectionShapes<dim>& get_updated_conv_shapes(const FVGeometryBase& geo, bool compute_deriv);
+	
+	///	computes the concentration
 	template <typename TElem>
 	void ex_value(number vValue[],
 					const MathVector<dim> vGlobIP[],
@@ -128,6 +138,20 @@ protected:
 					const size_t nip,
 					bool bDeriv,
 					std::vector<std::vector<MathVector<dim> > > vvvDeriv[]);
+	
+	/// computes the convection 
+	template <typename TElem>
+	void ex_conv(MathVector<dim> vValue[],
+					const MathVector<dim> vGlobIP[],
+					number time, int si,
+					const LocalVector& u,
+					GridObject* elem,
+					const MathVector<dim> vCornerCoords[],
+					const MathVector<FV1Geometry<TElem, dim>::dim> vLocIP[],
+					const size_t nip,
+					bool bDeriv,
+					std::vector<std::vector<MathVector<dim> > > vvvDeriv[]);
+					
 	
 public:
 	///	sets the flux
@@ -173,22 +197,53 @@ public:
 #endif
 	///	\}
 	
+	///	\{
+	void set_krw(SmartPtr<CplUserData<number, dim> > user){
+			m_imRelativeK.set_data(user);
+			m_imRelativeK.set_comp_lin_defect(false);
+		};
+	void set_krw(number val){
+			//if(val == 0.0) set_source(SmartPtr<CplUserData<number, dim> >());
+			//else 
+			set_krw(make_sp(new ConstUserNumber<dim>(val)));
+		};
+#ifdef UG_FOR_LUA
+	void set_krw(const char* fctName){
+			set_krw(LuaUserDataFactory<number,dim>::create(fctName));
+		};
+	void set_krw(LuaFunctionHandle fct){
+			set_krw(make_sp(new LuaUserData<number,dim>(fct)));
+		};
+#endif
+	///	\}
+	
+	/// \{
+	void set_velocity(SmartPtr<CplUserData<MathVector<dim>, dim> > user){
+		m_imVelocity.set_data(user);
+		m_imVelocity.set_comp_lin_defect(false);		
+	}
+#ifdef UG_FOR_LUA
+	void set_velocity(const char* fctName){
+		set_velocity(LuaUserDataFactory<MathVector<dim>,dim>::create(fctName));
+	}
+	void set_velocity(LuaFunctionHandle fct){
+		set_velocity(make_sp(new LuaUserData<MathVector<dim>,dim>(fct)));
+	}
+#endif
+	/// \}	
+	
 protected:		
 	///	Data import for the Flux
 	DataImport<MathVector<dim>, dim > m_imFlux;
 		
 	///	Data import for the right-hand side (volume)
 	DataImport<number, dim> m_imSource;
-
-public:
-	typedef SmartPtr<CplUserData<number, dim> > NumberExport;
-	typedef SmartPtr<CplUserData<MathVector<dim>, dim> > GradExport;
-
-	///	returns the export of the value of associated unknown function
-	SmartPtr<CplUserData<number, dim> > value();
-
-	///	returns the export of the gradient of associated unknown function
-	SmartPtr<CplUserData<MathVector<dim>, dim> > gradient();
+	
+	///	Data import for the Velocity field
+	DataImport<MathVector<dim>, dim > m_imVelocity;
+	
+	///	Data import for the relative permeability
+	DataImport<number, dim> m_imRelativeK;
 
 protected:
 	///	Export for the concentration
@@ -196,7 +251,30 @@ protected:
 
 	///	Export for the gradient of concentration
 	SmartPtr<DataExport<MathVector<dim>, dim> > m_exGrad;
-		
+	
+	///	Export for the convection
+	SmartPtr<DataExport<MathVector<dim>, dim> > m_exConv;
+	
+public:
+	typedef SmartPtr<CplUserData<number, dim> > NumberExport;
+	typedef SmartPtr<CplUserData<MathVector<dim>, dim> > GradExport;
+	typedef SmartPtr<CplUserData<MathVector<dim>, dim> > ConvExport;
+	
+	///	returns the export of the value of associated unknown function
+	SmartPtr<CplUserData<number, dim> > value(){
+											return m_exValue;
+										};
+
+	///	returns the export of the gradient of associated unknown function
+	SmartPtr<CplUserData<MathVector<dim>, dim> > gradient(){
+													return m_exGrad;
+												};
+												
+	///	returns the export of the gradient of associated unknown function
+	SmartPtr<CplUserData<MathVector<dim>, dim> > convection(){
+													return m_exConv;
+												};
+
 
 //---- Local discretization interface: ----
 private:

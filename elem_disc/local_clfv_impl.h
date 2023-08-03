@@ -40,6 +40,7 @@
 #include "common/util/provider.h"
 #include "lib_disc/spatial_disc/disc_util/geom_provider.h"
 #include "lib_disc/spatial_disc/disc_util/fv1_geom.h"
+#include "lib_disc/spatial_disc/disc_util/conv_shape.h"
 #ifdef UG_FOR_LUA
 #include "bindings/lua/lua_user_data.h"
 #endif
@@ -85,7 +86,10 @@ void ConservationLawFV<TDomain>::prepare_element_loop
 	ReferenceObjectID roid, ///< only elements with this roid are looped over
 	int si ///< and only in this subdomain
 )
-{						
+{	
+	if(m_spConvShape.invalid())
+		UG_THROW("ConservationLawFV::prepare_element_loop:"
+						" Upwind has not been set.");
 	typedef FV1Geometry<TElem, dim> TFVGeom;
 	TFVGeom& geo = GeomProvider<TFVGeom>::get ();
 	static const int refDim = TElem::dim;
@@ -97,6 +101,13 @@ void ConservationLawFV<TDomain>::prepare_element_loop
 
 	m_imFlux.template 			set_local_ips<refDim>(vSCVFip,numSCVFip, false);		
 	m_imSource.template 		set_local_ips<refDim>(vSCVip,numSCVip, false);
+	
+	m_imVelocity.template 		set_local_ips<refDim>(vSCVFip,numSCVFip, false);
+	m_imRelativeK.template 		set_local_ips<refDim>(vSCVip,numSCVip, false);
+	
+	if(!m_spConvShape->template set_geometry_type<TFVGeom>(geo))
+		UG_THROW("ConservationLawFV::prep_elem_loop:"
+					" Cannot init upwind for element type.");
 }
 
 /// finalizes the loop over the elements
@@ -135,6 +146,8 @@ void ConservationLawFV<TDomain>::prepare_element
 	
 	m_imFlux.				set_global_ips(vSCVFip, numSCVFip);	
 	m_imSource.				set_global_ips(vSCVip, numSCVip);
+	m_imVelocity.			set_global_ips(vSCVFip, numSCVFip);	
+	m_imRelativeK.			set_global_ips(vSCVip, numSCVip);
 }
 
 template <class TVector>
@@ -338,6 +351,37 @@ lin_def_source(const LocalVector& u,
 
 
 ////////////////////////////////////////////////////////////////////////////////
+//	upwind
+////////////////////////////////////////////////////////////////////////////////
+template<typename TDomain>
+const typename ConservationLawFV<TDomain>::conv_shape_type&
+ConservationLawFV<TDomain>::
+get_updated_conv_shapes(const FVGeometryBase& geo, bool compute_deriv)
+{
+//	compute upwind shapes for transport equation
+//	\todo: we should move this computation into the preparation part of the
+//			disc, to only compute the shapes once, reusing them several times.
+	if(m_imVelocity.data_given())
+	{
+	//	get diffusion at ips
+		const MathMatrix<dim, dim>* vDiffusion = NULL;
+		//if(m_imDiffusion.data_given()) vDiffusion = m_imDiffusion.values();
+
+	//	update convection shapes
+		if(!m_spConvShape->update(&geo, m_imVelocity.values(), vDiffusion, compute_deriv))
+		{
+			UG_LOG("ERROR in 'ConvectionDiffusionMP::get_updated_conv_shapes': "
+					"Cannot compute convection shapes.\n");
+		}
+	}
+
+//	return a const (!!) reference to the upwind
+	return *const_cast<const IConvectionShapes<dim>*>(m_spConvShape.get());
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////
 //	Value and Gradient
 ////////////////////////////////////////////////////////////////////////////////
 template<typename TDomain>
@@ -507,44 +551,77 @@ ex_grad(MathVector<dim> vValue[],
 			}
 		}
 	}
-// 	general case
-	else
+
+};
+
+////////////////////////////////////////////////////////////////////////////////
+//	Export Convection
+////////////////////////////////////////////////////////////////////////////////
+
+template<typename TDomain>
+template <typename TElem>
+void ConservationLawFV<TDomain>::
+ex_conv(MathVector<dim> vValue[],
+        const MathVector<dim> vGlobIP[],
+        number time, int si,
+        const LocalVector& u,
+        GridObject* elem,
+        const MathVector<dim> vCornerCoords[],
+        const MathVector<FV1Geometry<TElem, dim>::dim> vLocIP[],
+        const size_t nip,
+        bool bDeriv,
+        std::vector<std::vector<MathVector<dim> > > vvvDeriv[])
+{
+	typedef FV1Geometry<TElem, dim> TFVGeom;
+	
+	// 	Get finite volume geometry
+	static const TFVGeom& geo = GeomProvider<TFVGeom>::get();
+	
+	//	get conv shapes
+	const IConvectionShapes<dim>& convShape = get_updated_conv_shapes(geo, false);
+
+//	reference element
+	typedef typename reference_element_traits<TElem>::reference_element_type ref_elem_type;
+
+//	reference dimension
+	static const int refDim = ref_elem_type::dim;
+
+//	number of shape functions
+	static const size_t numSH =	ref_elem_type::numCorners;
+
+//	SCVF ip
+	if(vLocIP == geo.scvf_local_ips())
 	{
-	//	get trial space
-		LagrangeP1<ref_elem_type>& rTrialSpace = Provider<LagrangeP1<ref_elem_type> >::get();
-
-	//	storage for shape function at ip
-		MathVector<refDim> vLocGrad[numSH];
-		MathVector<refDim> locGrad;
-
-	//	Reference Mapping
-		MathMatrix<dim, refDim> JTInv;
-		ReferenceMapping<ref_elem_type, dim> mapping(vCornerCoords);
-
-	//	loop ips
-		for(size_t ip = 0; ip < nip; ++ip)
+	//	Loop Sub Control Volume Faces (SCVF)
+		for(size_t ip = 0; ip < geo.num_scvf(); ++ip)
 		{
-		//	evaluate at shapes at ip
-			rTrialSpace.grads(vLocGrad, vLocIP[ip]);
+		// 	Get current SCVF
+			const typename TFVGeom::SCVF& scvf = geo.scvf(ip);
+			//const typename TFVGeom::SCV& scv = geo.scv(ip);
 
-		//	compute grad at ip
-			VecSet(locGrad, 0.0);
-			for(size_t sh = 0; sh < numSH; ++sh)
-				VecScaleAppend(locGrad, u(_C_, sh), vLocGrad[sh]);
+			VecSet(vValue[ip], 0.0);
 
-		//	compute global grad
-			mapping.jacobian_transposed_inverse(JTInv, vLocIP[ip]);
-			MatVecMult(vValue[ip], JTInv, locGrad);
+			// 	loop shape functions to get krw at the upwinding node
+			number krw = 0.0;
+			number factor = 0.0;
+			for(size_t sh = 0; sh < convShape.num_sh(); ++sh)
+			{
+				krw += m_imRelativeK[sh] * convShape(ip, sh);
+				factor += convShape(ip, sh);
+			}
+			if (factor != 0)
+				krw = krw / factor;
+			//  compute upwind convection
+			VecScaleAppend(vValue[ip], krw, m_imVelocity[ip]);
 
-		//	compute derivative w.r.t. to unknowns iff needed
 			if(bDeriv)
 			{
-				for(size_t sh = 0; sh < numSH; ++sh)
-					MatVecMult(vvvDeriv[ip][_C_][sh], JTInv, vLocGrad[sh]);
+				for(size_t sh = 0; sh < scvf.num_sh(); ++sh)
+					vvvDeriv[ip][_C_][sh] = scvf.global_grad(sh);
 
 				// beware of hanging nodes!
 				size_t ndof = vvvDeriv[ip][_C_].size();
-				for (size_t sh = numSH; sh < ndof; ++sh)
+				for (size_t sh = scvf.num_sh(); sh < ndof; ++sh)
 					vvvDeriv[ip][_C_][sh] = 0.0;
 			}
 		}
@@ -591,8 +668,10 @@ void ConservationLawFV<TDomain>::register_loc_discr_func ()
 	m_imSource.	  set_fct(id, this, &T::template lin_def_source<TElem>);
 	
 	//	exports
-	m_exValue->	   template set_fct<T,refDim>(id, this, &T::template ex_value<TElem>);
+	m_exValue->template set_fct<T,refDim>(id, this, &T::template ex_value<TElem>);
 	m_exGrad->template set_fct<T,refDim>(id, this, &T::template ex_grad<TElem>);
+	m_exConv->template set_fct<T,refDim>(id, this, &T::template ex_conv<TElem>);
+	
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -607,7 +686,9 @@ ConservationLawFV
 )
 :	IElemDisc<TDomain> (functions, subsets),
 	m_exValue(new DataExport<number, dim>(functions)),
-	m_exGrad(new DataExport<MathVector<dim>, dim>(functions))
+	m_exGrad(new DataExport<MathVector<dim>, dim>(functions)),
+	m_exConv(new DataExport<MathVector<dim>, dim>(functions)),
+	m_spConvShape(new ConvectionShapesNoUpwind<dim>)
 {
 //	check number of functions
 	if (this->num_fct () != 1)
@@ -627,15 +708,6 @@ ConservationLawFV
 ////////////////////////////////////////////////////////////////////////////////
 //	user data
 ////////////////////////////////////////////////////////////////////////////////
-template <typename TDomain>
-typename ConservationLawFV<TDomain>::NumberExport
-ConservationLawFV<TDomain>::
-value() {return m_exValue;}
-
-template <typename TDomain>
-typename ConservationLawFV<TDomain>::GradExport
-ConservationLawFV<TDomain>::
-gradient() {return m_exGrad;}
 
 template<typename TDomain>
 void ConservationLawFV<TDomain>::
@@ -644,6 +716,8 @@ init_imports()
 	//	register imports
 	this->register_import(m_imFlux);
 	this->register_import(m_imSource);
+	this->register_import(m_imVelocity);
+	this->register_import(m_imRelativeK);
 	
 	m_imSource.set_rhs_part();
 }
