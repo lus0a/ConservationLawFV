@@ -57,8 +57,6 @@ void CopyGlobAttachmentToGF_CellNumber
 	
 	if (pGF->local_finite_element_id (fct).type () != LFEID::PIECEWISE_CONSTANT)
 		UG_THROW ("CopyGlobAttachmentToGF_CellNumber: Not a piecewise-constant grid function specified.");
-	if (pGF->num_dofs (fct) != 1)
-		UG_THROW ("CopyGlobAttachmentToGF_CellNumber: Non-scalar function specified.");
 	
 	// get the grid
 	auto & grid = * (pGF->domain()->grid ());
