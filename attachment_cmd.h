@@ -63,6 +63,26 @@ void CopyGlobAttachmentToGF_CellNumber
 	const char * fct_name ///< name of the function in the grid function
 );
 
+
+template <typename TGridFunc>
+void CopyGlobAttachmentToGF_NodeNumber
+(
+	const char * attachment_name, ///< name of the global attachment
+	TGridFunc * pGF, ///< the grid function to copy to
+	size_t fct ///< index of the function in the grid function
+);
+
+/**
+ * Copies (scalar) values attached to the full-dimensional elements to a nodal grid function.
+ */
+template <typename TGridFunc>
+void CopyGlobAttachmentToGF_NodeNumber
+(
+	const char * attachment_name, ///< name of the global attachment
+	SmartPtr<TGridFunc> pGF, ///< the grid function to copy to
+	const char * fct_name ///< name of the function in the grid function
+);
+
 } // end namespace Conservation_Law_FV
 } // end namespace ug
 

@@ -116,6 +116,11 @@ struct Functionality
 		typedef GridFunction<TDomain, TAlgebra> gf_type; 
 		reg.add_function("CopyGlobAttachmentToGF_CellNumber", static_cast<void (*)(const char *, SmartPtr<gf_type>, const char *)> (&CopyGlobAttachmentToGF_CellNumber), grp, "Copies attachment to a function", "Attachment#GridFunc#Component");
 		}
+		
+		{
+		typedef GridFunction<TDomain, TAlgebra> gf_type; 
+		reg.add_function("CopyGlobAttachmentToGF_NodeNumber", static_cast<void (*)(const char *, SmartPtr<gf_type>, const char *)> (&CopyGlobAttachmentToGF_NodeNumber), grp, "Copies attachment to a function", "Attachment#GridFunc#Component");
+		}
 	};
 	
 };
