@@ -37,12 +37,6 @@
 #include "lib_grid/grid_objects/grid_dim_traits.h"
 #include "lib_grid/global_attachments.h"
 
-/*
-#ifdef UG_PARALLEL
-	#include "pcl/pcl_process_communicator.h"
-	#include "pcl/pcl_util.h"
-#endif
-*/
 
 namespace ug{
 namespace Conservation_Law_FV{
